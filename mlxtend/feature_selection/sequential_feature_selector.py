@@ -317,6 +317,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
         self.fixed_features_ = self.fixed_features
         self.fixed_features_set_ = set()
 
+        #Check if it's a pandas df or a numpy array
         if hasattr(X, 'loc'):
             X_ = X.values
             if self.fixed_features is not None:
@@ -393,6 +394,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
             n_features = len(orig_set)
 
         if self.forward:
+            #forward
             if select_in_range:
                 k_to_select = max_k
 
@@ -411,6 +413,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
                 k_idx = ()
                 k = 0
         else:
+            #backward
             if select_in_range:
                 k_to_select = min_k
             k_idx = tuple(orig_set)
@@ -590,7 +593,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
         return self
 
     def _inclusion(self, orig_set, subset, X, y, ignore_feature=None,
-                   groups=None, **fit_params):
+                   groups=None, multi_index=None, **fit_params):
         all_avg_scores = []
         all_cv_scores = []
         all_subsets = []
@@ -620,7 +623,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
         return res
 
     def _exclusion(self, feature_set, X, y, fixed_feature=None,
-                   groups=None, **fit_params):
+                   groups=None, multi_index=None, **fit_params):
         n = len(feature_set)
         res = (None, None, None)
         if n > 1:
