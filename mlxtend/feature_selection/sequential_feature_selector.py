@@ -22,17 +22,11 @@ from ..utils.base_compostion import _BaseXComposition
 from sklearn.model_selection import cross_val_score
 from joblib import Parallel, delayed
 
-def _to_set(x):
-    if isinstance(x, tuple):
-        return set(x)
+def flatten(x, multi_index):
+    if not multi_index:
+        return x
     else:
-        return {x}
-        
-def _nr_of_features_in(k_idx, orig_set, multi_index):
-    if multi_index:
-        return sum([any(np.isin(tup, k_idx)) for tup in orig_set])
-    else:
-        return len(k_idx)
+        return tuple(element for tupl in x for element in tupl)
 
 def _calc_score(selector, X, y, indices, groups=None, **fit_params):
     if selector.cv:
@@ -50,14 +44,14 @@ def _calc_score(selector, X, y, indices, groups=None, **fit_params):
     return indices, scores
 
 
-def _get_featurenames(subsets_dict, feature_idx, custom_feature_names, X):
+def _get_featurenames(subsets_dict, feature_idx, custom_feature_names, X, multi_index):
     feature_names = None
     if feature_idx is not None:
         if custom_feature_names is not None:
             feature_names = tuple((custom_feature_names[i]
                                    for i in feature_idx))
         elif hasattr(X, 'loc'):
-            feature_names = tuple((X.columns[i] for i in feature_idx))
+            feature_names = tuple((X.columns[i] for i in flatten(feature_idx, multi_index)))
         else:
             feature_names = tuple(str(i) for i in feature_idx)
 
@@ -68,7 +62,7 @@ def _get_featurenames(subsets_dict, feature_idx, custom_feature_names, X):
                                for i in subsets_dict[key]['feature_idx']))
         elif hasattr(X, 'loc'):
             new_tuple = tuple((X.columns[i]
-                               for i in subsets_dict[key]['feature_idx']))
+                               for i in flatten(subsets_dict[key]['feature_idx'], multi_index)))
         else:
             new_tuple = tuple(str(i) for i in subsets_dict[key]['feature_idx'])
         subsets_dict_[key]['feature_names'] = new_tuple
@@ -428,8 +422,8 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
 
             if self.fixed_features is not None:
                 k_idx = self.fixed_features_
-                k = _nr_of_features_in(k_idx, orig_set, self.multi_index)
-                k_idx, k_score = _calc_score(self, X_[:, k_idx], y, k_idx,
+                k = len(k_idx)
+                k_idx, k_score = _calc_score(self, X_[:, flatten(k_idx, self.multi_index)], y, k_idx,
                                              groups=groups, **fit_params)
                 self.subsets_[k] = {
                     'feature_idx': k_idx,
@@ -445,8 +439,8 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
             if select_in_range:
                 k_to_select = min_k
             k_idx = tuple(orig_set)
-            k = _nr_of_features_in(k_idx, orig_set, self.multi_index)
-            k_idx, k_score = _calc_score(self, X_[:, k_idx], y, k_idx,
+            k = len(k_idx)
+            k_idx, k_score = _calc_score(self, X_[:, flatten(k_idx, self.multi_index)], y, k_idx,
                                          groups=groups, **fit_params)
             self.subsets_[k] = {
                 'feature_idx': k_idx,
@@ -547,7 +541,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
                         else:
                             continuation_cond_2 = False
 
-                k = _nr_of_features_in(k_idx, orig_set, self.multi_index)
+                k = len(k_idx)
                 # floating can lead to multiple same-sized subsets
                 if k not in self.subsets_ or (k_score >
                                               self.subsets_[k]['avg_score']):
@@ -561,14 +555,14 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
 
                 if self.verbose == 1:
                     sys.stderr.write('\rFeatures: %d/%s' % (
-                        _nr_of_features_in(k_idx, orig_set, self.multi_index),
+                        len(k_idx),
                         k_to_select
                     ))
                     sys.stderr.flush()
                 elif self.verbose > 1:
                     sys.stderr.write('\n[%s] Features: %d/%s -- score: %s' % (
                         datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        _nr_of_features_in(k_idx, orig_set, self.multi_index),
+                        len(k_idx),
                         k_to_select,
                         k_score
                     ))
@@ -578,7 +572,8 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
                         _get_featurenames(self.subsets_,
                                           self.k_feature_idx_,
                                           custom_feature_names,
-                                          X)
+                                          X,
+                                          self.multi_index)
                     raise KeyboardInterrupt
 
         except KeyboardInterrupt:
@@ -617,7 +612,8 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
             _get_featurenames(self.subsets_,
                               self.k_feature_idx_,
                               custom_feature_names,
-                              X)
+                              X,
+                              self.multi_index)
         return self
 
     def _inclusion(self, orig_set, subset, X, y, ignore_feature=None,
@@ -633,8 +629,8 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
             parallel = Parallel(n_jobs=n_jobs, verbose=self.verbose,
                                 pre_dispatch=self.pre_dispatch)
             work = parallel(delayed(_calc_score)
-                            (self, X[:, tuple(subset | _to_set(feature))], y,
-                            tuple(subset | _to_set(feature)),
+                            (self, X[:, flatten(tuple(subset | {feature}), self.multi_index)], y,
+                            tuple(subset | {feature}),
                             groups=groups, **fit_params)
                             for feature in remaining
                             if feature != ignore_feature)               
