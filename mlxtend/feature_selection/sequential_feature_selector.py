@@ -22,6 +22,17 @@ from ..utils.base_compostion import _BaseXComposition
 from sklearn.model_selection import cross_val_score
 from joblib import Parallel, delayed
 
+def _to_set(x):
+    if isinstance(x, tuple):
+        return set(x)
+    else:
+        return {x}
+        
+def _nr_of_features_in(k_idx, orig_set, multi_index):
+    if multi_index:
+        return sum([any(np.isin(tup, k_idx)) for tup in orig_set])
+    else:
+        return len(k_idx)
 
 def _calc_score(selector, X, y, indices, groups=None, **fit_params):
     if selector.cv:
@@ -313,6 +324,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
         self.k_feature_idx_ = None
         self.k_feature_names_ = None
         self.k_score_ = None
+        self.multi_index = False
 
         self.fixed_features_ = self.fixed_features
         self.fixed_features_set_ = set()
@@ -322,9 +334,14 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
             X_ = X.values
             if self.fixed_features is not None:
                 self.fixed_features_ = tuple(X.columns.get_loc(c)
-                                             if isinstance(c, str) else c
-                                             for c in self.fixed_features
-                                             )
+                                            if isinstance(c, str) or isinstance(c, tuple) else c
+                                            for c in self.fixed_features)
+            if X.columns.nlevels == 2:
+                self.multi_index = True
+                #transforming all slices into indices
+                if self.fixed_features is not None:
+                    self.fixed_features_ = sum(tuple(tuple(range(x.start, x.stop)) if isinstance(x, slice) else (x,) for x in self.fixed_features_), ())
+
         else:
             X_ = X
 
@@ -386,11 +403,22 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
             select_in_range = False
             k_to_select = self.k_features
 
-        orig_set = set(range(X_.shape[1]))
-        n_features = X_.shape[1]
+        #in case of multiIndex n_features is the number of unique indexes on level 1 of the dataframe, each feature might have multiple 'dimensions/subfeatures'
+        if self.multi_index:
+            orig_set = set()
+            for reason in X.columns.get_level_values(0).unique():
+                slicex = X.columns.get_loc(reason)
+                if isinstance(slicex, slice):
+                    orig_set.add(tuple(range(slicex.start, slicex.stop)))
+                else:
+                    orig_set.add(tuple(map(tuple, np.where(slicex)))[0])
+            n_features = len(orig_set)
+        else:
+            orig_set = set(range(X_.shape[1]))
+            n_features = X_.shape[1]
 
         if self.forward and self.fixed_features is not None:
-            orig_set = set(range(X_.shape[1])) - self.fixed_features_set_
+            orig_set = orig_set - self.fixed_features_set_
             n_features = len(orig_set)
 
         if self.forward:
@@ -400,7 +428,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
 
             if self.fixed_features is not None:
                 k_idx = self.fixed_features_
-                k = len(k_idx)
+                k = _nr_of_features_in(k_idx, orig_set, self.multi_index)
                 k_idx, k_score = _calc_score(self, X_[:, k_idx], y, k_idx,
                                              groups=groups, **fit_params)
                 self.subsets_[k] = {
@@ -417,7 +445,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
             if select_in_range:
                 k_to_select = min_k
             k_idx = tuple(orig_set)
-            k = len(k_idx)
+            k = _nr_of_features_in(k_idx, orig_set, self.multi_index)
             k_idx, k_score = _calc_score(self, X_[:, k_idx], y, k_idx,
                                          groups=groups, **fit_params)
             self.subsets_[k] = {
@@ -519,7 +547,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
                         else:
                             continuation_cond_2 = False
 
-                k = len(k_idx)
+                k = _nr_of_features_in(k_idx, orig_set, self.multi_index)
                 # floating can lead to multiple same-sized subsets
                 if k not in self.subsets_ or (k_score >
                                               self.subsets_[k]['avg_score']):
@@ -533,14 +561,14 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
 
                 if self.verbose == 1:
                     sys.stderr.write('\rFeatures: %d/%s' % (
-                        len(k_idx),
+                        _nr_of_features_in(k_idx, orig_set, self.multi_index),
                         k_to_select
                     ))
                     sys.stderr.flush()
                 elif self.verbose > 1:
                     sys.stderr.write('\n[%s] Features: %d/%s -- score: %s' % (
                         datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        len(k_idx),
+                        _nr_of_features_in(k_idx, orig_set, self.multi_index),
                         k_to_select,
                         k_score
                     ))
@@ -593,7 +621,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
         return self
 
     def _inclusion(self, orig_set, subset, X, y, ignore_feature=None,
-                   groups=None, multi_index=None, **fit_params):
+                   groups=None, **fit_params):
         all_avg_scores = []
         all_cv_scores = []
         all_subsets = []
@@ -605,11 +633,11 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
             parallel = Parallel(n_jobs=n_jobs, verbose=self.verbose,
                                 pre_dispatch=self.pre_dispatch)
             work = parallel(delayed(_calc_score)
-                            (self, X[:, tuple(subset | {feature})], y,
-                             tuple(subset | {feature}),
-                             groups=groups, **fit_params)
+                            (self, X[:, tuple(subset | _to_set(feature))], y,
+                            tuple(subset | _to_set(feature)),
+                            groups=groups, **fit_params)
                             for feature in remaining
-                            if feature != ignore_feature)
+                            if feature != ignore_feature)               
 
             for new_subset, cv_scores in work:
                 all_avg_scores.append(np.nanmean(cv_scores))
@@ -623,7 +651,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
         return res
 
     def _exclusion(self, feature_set, X, y, fixed_feature=None,
-                   groups=None, multi_index=None, **fit_params):
+                   groups=None, **fit_params):
         n = len(feature_set)
         res = (None, None, None)
         if n > 1:
