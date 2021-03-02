@@ -697,7 +697,7 @@ class SequentialFeatureSelector(_BaseXComposition, MetaEstimatorMixin):
             X_ = X.values
         else:
             X_ = X
-        return X_[:, self.k_feature_idx_]
+        return X_[:, flatten(self.k_feature_idx_, self.multi_index)]
 
     def fit_transform(self, X, y, groups=None, **fit_params):
         """Fit to training data then reduce X to its most important features.
